@@ -2,6 +2,9 @@ package BetterSL;
 
 
 import BetterSL.modcore.BetterSL;
+import basemod.BaseMod;
+import basemod.abstracts.CustomSavable;
+import basemod.interfaces.ISubscriber;
 import com.badlogic.gdx.files.FileHandle;
 import com.google.gson.Gson;
 import com.megacrit.cardcrawl.blights.AbstractBlight;
@@ -28,21 +31,37 @@ import org.apache.logging.log4j.Logger;
 import patches.DungeonInstancePatch;
 import patches.GameInstancePatch;
 
-
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
 
 import static com.megacrit.cardcrawl.core.CardCrawlGame.*;
 import static com.megacrit.cardcrawl.saveAndContinue.SaveAndContinue.getPlayerSavePath;
 
-public class SaveLoad {
+public class SaveLoad implements CustomSavable<BetterSL.SaveLoad.ModSaveData>, ISubscriber {
     private static final Logger logger = LogManager.getLogger(CardCrawlGame.class.getName());
     public static Map<String,AbstractPlayer> players = new HashMap<>();
     public static Map<String,AbstractPlayer> save_state = new HashMap<>();
+
     public static Path altSave = null;
     public static String file_name = getPlayerSavePath(AbstractDungeon.player.chosenClass).split("\\\\")[1];
+    public SaveLoad() {
+        BaseMod.subscribe(this);
+        BaseMod.addSaveField("BetterSL:ModSaveData", this);
+        BetterSL.logger.info("SaveLoad Init");
+    }
+    @Override
+    public ModSaveData onSave() {
+        return new  ModSaveData(players, save_state);
+    }
+    @Override
+    public void onLoad(ModSaveData save) {
+        players = save.players;
+        save_state = save.save_state;
+    }
     public static void save(String save_name) {
         BetterSL.logger.info("Saving to save state " + save_state);
         copySaveFile(save_name);
@@ -350,6 +369,15 @@ public class SaveLoad {
 
         if (saveFile.neow_cost != null) {
             metricData.neowCost = saveFile.neow_cost;
+        }
+    }
+    public static class ModSaveData {
+        public Map<String,AbstractPlayer> players;
+        public Map<String,AbstractPlayer> save_state;
+
+        public ModSaveData(Map<String,AbstractPlayer> players, Map<String,AbstractPlayer> save_state) {
+            this.players = players;
+            this.save_state = save_state;
         }
     }
 

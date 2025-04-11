@@ -1,6 +1,7 @@
 package BetterSL.modcore;
 
 import BetterSL.Command.SLCommand;
+import BetterSL.SaveLoad;
 import basemod.BaseMod;
 import basemod.devcommands.ConsoleCommand;
 import basemod.interfaces.PostInitializeSubscriber;
@@ -26,6 +27,7 @@ public class BetterSL implements PostInitializeSubscriber {
 
     public static void initialize(){
         new BetterSL();
+        new SaveLoad();
 
     }
     public BetterSL() {
@@ -66,6 +68,7 @@ public class BetterSL implements PostInitializeSubscriber {
             throw new RuntimeException("SLCommand registration failed.", e);
         }
     }
+
 
 
 }
