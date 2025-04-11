@@ -41,7 +41,7 @@ import java.util.Map;
 import static com.megacrit.cardcrawl.core.CardCrawlGame.*;
 import static com.megacrit.cardcrawl.saveAndContinue.SaveAndContinue.getPlayerSavePath;
 
-public class SaveLoad implements CustomSavable<BetterSL.SaveLoad.ModSaveData>, ISubscriber {
+public class SaveLoad implements CustomSavable<ModSaveData>, ISubscriber {
     private static final Logger logger = LogManager.getLogger(CardCrawlGame.class.getName());
     public static Map<String,AbstractPlayer> players = new HashMap<>();
     public static Map<String,AbstractPlayer> save_state = new HashMap<>();
@@ -371,15 +371,7 @@ public class SaveLoad implements CustomSavable<BetterSL.SaveLoad.ModSaveData>, I
             metricData.neowCost = saveFile.neow_cost;
         }
     }
-    public static class ModSaveData {
-        public Map<String,AbstractPlayer> players;
-        public Map<String,AbstractPlayer> save_state;
 
-        public ModSaveData(Map<String,AbstractPlayer> players, Map<String,AbstractPlayer> save_state) {
-            this.players = players;
-            this.save_state = save_state;
-        }
-    }
 
 
 }
