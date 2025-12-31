@@ -3,9 +3,9 @@
   "name": "BetterSL",
   "author_list": ["ax4987"],
   "credits": "",
-  "description": "",
-  "version": "1.0.2",
+  "description": "这是一个可以自定义楼层回档的Mod，欢迎大家反馈问题",
+  "version": "1.0.3",
   "sts_version": "12-18-2022",
   "mts_version": "3.30.0",
-  "dependencies": ["basemod","stslib"]
+  "dependencies": ["basemod", "StSLib"]
 }

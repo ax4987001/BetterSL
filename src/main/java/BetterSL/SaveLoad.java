@@ -5,6 +5,7 @@ import BetterSL.modcore.BetterSL;
 import basemod.BaseMod;
 import basemod.abstracts.CustomSavable;
 import basemod.interfaces.ISubscriber;
+import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.files.FileHandle;
 import com.google.gson.Gson;
 import com.megacrit.cardcrawl.blights.AbstractBlight;
@@ -38,6 +39,13 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
 
+// 补充导入
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonElement;
+import com.google.gson.ExclusionStrategy;
+import com.google.gson.FieldAttributes;
+
 import static com.megacrit.cardcrawl.core.CardCrawlGame.*;
 import static com.megacrit.cardcrawl.saveAndContinue.SaveAndContinue.getPlayerSavePath;
 
@@ -47,7 +55,31 @@ public class SaveLoad implements CustomSavable<ModSaveData>, ISubscriber {
     public static Map<String,AbstractPlayer> save_state = new HashMap<>();
 
     public static Path altSave = null;
-    public static String file_name = getPlayerSavePath(AbstractDungeon.player.chosenClass).split("\\\\")[1];
+    public static String file_name = null;
+
+    // ========== 新增：自定义 Gson 实例（核心，过滤 scale 字段冲突） ==========
+    // 简化自定义 Gson 实例（仅过滤冲突字段，无需过滤类）
+    private static final Gson CUSTOM_SAVE_GSON = new GsonBuilder()
+            .disableHtmlEscaping() // 对齐原生 Gson 配置
+            .setExclusionStrategies(new ExclusionStrategy() {
+                @Override
+                public boolean shouldSkipField(FieldAttributes f) {
+                    // 仅过滤已知冲突字段（scale/color），其他核心字段正常序列化
+                    return "scale".equals(f.getName()) || "color".equals(f.getName());
+                }
+
+                @Override
+                public boolean shouldSkipClass(Class<?> clazz) {
+                    return false;
+                }
+            })
+            .create();
+
+    // 保留原有 onSaveRaw() 逻辑（使用简化后的 Gson）
+    @Override
+    public JsonElement onSaveRaw() {
+        return CUSTOM_SAVE_GSON.toJsonTree(this.onSave());
+    }
     public SaveLoad() {
         BaseMod.subscribe(this);
         BaseMod.addSaveField("BetterSL:ModSaveData", this);
@@ -59,8 +91,140 @@ public class SaveLoad implements CustomSavable<ModSaveData>, ISubscriber {
     }
     @Override
     public void onLoad(ModSaveData save) {
-        players = save.players;
-        save_state = save.save_state;
+        // 清空原有数据
+        players.clear();
+        save_state.clear();
+
+        // 还原 players 映射
+        if (save.playerCoreDataMap != null) {
+            for (Map.Entry<String, ModSaveData.PlayerCoreData> entry : save.playerCoreDataMap.entrySet()) {
+                String key = entry.getKey();
+                ModSaveData.PlayerCoreData coreData = entry.getValue();
+                AbstractPlayer player = restorePlayerFromCoreData(coreData);
+                if (player != null) {
+                    players.put(key, player);
+                }
+            }
+        }
+
+        // 还原 save_state 映射
+        if (save.saveStateCoreDataMap != null) {
+            for (Map.Entry<String, ModSaveData.PlayerCoreData> entry : save.saveStateCoreDataMap.entrySet()) {
+                String key = entry.getKey();
+                ModSaveData.PlayerCoreData coreData = entry.getValue();
+                AbstractPlayer player = restorePlayerFromCoreData(coreData);
+                if (player != null) {
+                    save_state.put(key, player);
+                }
+            }
+        }
+    }
+
+    // 辅助方法：从 PlayerCoreData 还原 AbstractPlayer（复用原生 API）
+    private AbstractPlayer restorePlayerFromCoreData(ModSaveData.PlayerCoreData coreData) {
+        try {
+            // 1. 反射创建玩家实例（模仿原生存档还原逻辑）
+            Class<?> playerClass = Class.forName(coreData.playerClassName);
+            AbstractPlayer player = (AbstractPlayer) playerClass.getConstructor().newInstance();
+
+            // 2. 还原基础状态
+            player.currentHealth = coreData.currentHealth;
+            player.maxHealth = coreData.maxHealth;
+            player.gold = coreData.gold;
+            player.displayGold = coreData.gold;
+            player.chosenClass = AbstractPlayer.PlayerClass.valueOf(coreData.chosenClass);
+            AbstractDungeon.ascensionLevel = coreData.ascensionLevel;
+            AbstractDungeon.isAscensionMode = coreData.isAscensionMode;
+            player.masterHandSize = coreData.masterHandSize;
+            player.potionSlots = coreData.potionSlots;
+            player.masterMaxOrbs = coreData.masterMaxOrbs;
+            player.energy = new EnergyManager(coreData.energyCount);
+
+            // 3. 还原卡组（复用原生 CardLibrary.getCopy()）
+            player.masterDeck.clear();
+            for (CardSave cardSave : coreData.masterDeckCards) {
+                player.masterDeck.addToTop(CardLibrary.getCopy(cardSave.id, cardSave.upgrades, cardSave.misc));
+            }
+
+            // 4. 还原遗物（复用原生 RelicLibrary.getRelic()）
+            player.relics.clear();
+            int relicIndex = 0;
+            for (String relicId : coreData.relicIds) {
+                AbstractRelic relic = RelicLibrary.getRelic(relicId).makeCopy();
+                relic.instantObtain(player, relicIndex, false);
+                // 还原遗物计数器
+                if (relicIndex < coreData.relicCounters.size()) {
+                    relic.setCounter(coreData.relicCounters.get(relicIndex));
+                }
+                relic.updateDescription(player.chosenClass);
+                relicIndex++;
+            }
+
+            // 5. 还原药水（复用原生 PotionHelper.getPotion()）
+            player.potions.clear();
+            // 先添加药水槽
+            for (int i = 0; i < coreData.potionSlots; i++) {
+                player.potions.add(new PotionSlot(i));
+            }
+            // 再添加药水实例
+            int potionIndex = 0;
+            for (String potionId : coreData.potionIds) {
+                AbstractPotion potion = PotionHelper.getPotion(potionId);
+                if (potion != null && potionIndex < coreData.potionSlots) {
+                    player.obtainPotion(potionIndex, potion);
+                    potionIndex++;
+                }
+            }
+
+            // 6. 还原疫病（复用原生 BlightHelper.getBlight()）
+            player.blights.clear();
+            int blightIndex = 0;
+            for (String blightId : coreData.blightIds) {
+                AbstractBlight blight = BlightHelper.getBlight(blightId);
+                if (blight != null) {
+                    int incrementAmount = coreData.blightIncrements.get(blightIndex);
+                    // 还原疫病等级
+                    for (int i = 0; i < incrementAmount; i++) {
+                        blight.incrementUp();
+                    }
+                    blight.setIncrement(incrementAmount);
+                    blight.instantObtain(player, blightIndex, false);
+                    // 还原疫病计数器
+                    if (blightIndex < coreData.blightCounters.size()) {
+                        blight.setCounter(coreData.blightCounters.get(blightIndex));
+                        blight.updateDescription(player.chosenClass);
+                    }
+                }
+                blightIndex++;
+            }
+
+            // 7. 还原瓶装卡片（模仿原生 loadPlayerSave 逻辑）
+            if (coreData.bottledFlameId != null) {
+                AbstractCard flameCard = null;
+                for (AbstractCard card : player.masterDeck.group) {
+                    if (card.cardID.equals(coreData.bottledFlameId)
+                            && card.timesUpgraded == coreData.bottledFlameUpgrade
+                            && card.misc == coreData.bottledFlameMisc) {
+                        flameCard = card;
+                        break;
+                    }
+                }
+                if (flameCard != null) {
+                    flameCard.inBottleFlame = true;
+                    AbstractRelic flameRelic = player.getRelic("Bottled Flame");
+                    if (flameRelic instanceof BottledFlame) {
+                        ((BottledFlame) flameRelic).card = flameCard;
+                        ((BottledFlame) flameRelic).setDescriptionAfterLoading();
+                    }
+                }
+            }
+            // 同理还原 bottledLightning、bottledTornado...
+
+            return player;
+        } catch (Exception e) {
+            BetterSL.logger.error("还原玩家失败", e);
+            return null;
+        }
     }
     public static void save(String save_name) {
         BetterSL.logger.info("Saving to save state " + save_state);
@@ -70,8 +234,10 @@ public class SaveLoad implements CustomSavable<ModSaveData>, ISubscriber {
 
 
     }
-    public static void load(int floor) {
 
+
+    public static void load(int floor) {
+        file_name = getPlayerSavePath(AbstractDungeon.player.chosenClass).split("\\\\")[1];
         BetterSL.logger.info("Loading from save state " + floor + file_name);
         altSave = Paths.get("SL", String.valueOf(floor), file_name); // 设置路径
         SaveAndContinue.deleteSave(AbstractDungeon.player);
@@ -91,7 +257,7 @@ public class SaveLoad implements CustomSavable<ModSaveData>, ISubscriber {
 
     }
     public static void load(String state_name) {
-
+        file_name = getPlayerSavePath(AbstractDungeon.player.chosenClass).split("\\\\")[1];
         BetterSL.logger.info("Loading from save state " + state_name + file_name);
         altSave = Paths.get("SL", state_name, file_name); // 设置路径
         SaveAndContinue.deleteSave(AbstractDungeon.player);
@@ -112,38 +278,31 @@ public class SaveLoad implements CustomSavable<ModSaveData>, ISubscriber {
     }
 
     private static SaveFile loadSaveFile(Path altSave) throws SaveFileLoadError {
-        SaveFile saveFile;
-        Gson gson = new Gson();
-        String savestr;
-
         try {
             FileHandle file = new FileHandle(altSave.toFile());
             String data = file.readString();
-            savestr = SaveFileObfuscator.isObfuscated(data) ? SaveFileObfuscator.decode(data, "key") : data;
-            saveFile = gson.fromJson(savestr, SaveFile.class);
-            return saveFile;
+            String savestr = SaveFileObfuscator.isObfuscated(data) ? SaveFileObfuscator.decode(data, "key") : data;
+            // 复用自定义 Gson（与序列化逻辑一致）
+            return CUSTOM_SAVE_GSON.fromJson(savestr, SaveFile.class);
         } catch (Exception var7) {
             throw new SaveFileLoadError("Unable to load save file: " + altSave, var7);
         }
     }
     public static void copySaveFile(String targetDirectory) {
+        file_name = getPlayerSavePath(AbstractDungeon.player.chosenClass).split("\\\\")[1];
         try {
-            // 构造源路径
-            Path sourcePath = Paths.get("saves", file_name);
+            FileHandle sourceFile = Gdx.files.local("saves/" + file_name);
+            FileHandle targetDir = Gdx.files.local("SL/" + targetDirectory);
+            FileHandle targetFile = targetDir.child(file_name);
 
-            // 构造目标路径
-            Path targetPath = Paths.get("SL", targetDirectory, file_name);
-            if (!Files.exists(targetPath)) {
-                Files.createDirectories(targetPath); // 创建目标目录
+            // 原生文件操作，更稳定
+            if (!targetDir.exists()) {
+                targetDir.mkdirs();
             }
+            sourceFile.copyTo(targetFile);
 
-            // 使用AsyncSaver的文件复制方法
-            FileCopier.asyncCopy(sourcePath, targetPath);
-
-            // 打印成功信息
-            BetterSL.logger.info("File copy succeeded：from " + sourcePath + " to " + targetPath);
+            BetterSL.logger.info("File copy succeeded：from " + sourceFile.path() + " to " + targetFile.path());
         } catch (Exception e) {
-            // 错误处理
             BetterSL.logger.error("File copy failure：" + e.getMessage());
         }
     }
